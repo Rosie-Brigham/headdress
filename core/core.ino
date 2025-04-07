@@ -1,6 +1,7 @@
-#include <Adafruit_NeoPixel.h>
+#include "Adafruit_NeoPixel.h"  // Fixed quotes
 #include <PDM.h>
 
+// LED configuration
 #define PIXEL_PIN 2
 #define JEWEL1_PIXELS 7    // First jewel (7 LEDs)
 #define RING1_PIXELS 12    // First ring (12 LEDs)
@@ -12,6 +13,10 @@
 #define RING1_START 7     // Where first ring starts
 #define RING2_START 19    // Where second ring starts
 #define JEWEL2_START 35   // Where second jewel starts
+
+// Flow effect settings
+#define FLOW_SPEED 3      // How many pixels to advance per update
+#define HISTORY_LENGTH TOTAL_PIXELS  // Match with TOTAL_PIXELS
 
 // PDM buffer size
 #define SAMPLES 256  
@@ -27,9 +32,9 @@ float smoothedVolume = 3;
 float smoothedPitch = 3;
 
 // Volume response settings
-#define VOLUME_THRESHOLD 30  // Minimum volume to trigger changes
-#define LOW_VOLUME_SMOOTH 0.05  // More smoothing at low volumes
-#define HIGH_VOLUME_SMOOTH 0.3  // Less smoothing at high volumes
+#define VOLUME_THRESHOLD 50  // Minimum volume to trigger changes
+#define LOW_VOLUME_SMOOTH 0.05f  // More smoothing at low volumes (added f suffix)
+#define HIGH_VOLUME_SMOOTH 0.3f  // Less smoothing at high volumes (added f suffix)
 
 // Previous values for smoothing
 float lastBrightness = 50;  
@@ -39,7 +44,10 @@ float lastHue = 0;
 float maxVolume = 100;
 float minVolume = 0;
 
-Adafruit_NeoPixel pixels = Adafruit_NeoPixel(TOTAL_PIXELS, PIXEL_PIN, NEO_RGB + NEO_KHZ800);
+// Color history for flow effect
+uint32_t colorHistory[HISTORY_LENGTH];
+
+Adafruit_NeoPixel pixels(TOTAL_PIXELS, PIXEL_PIN, NEO_RGB + NEO_KHZ800);
 
 void onPDMdata() {
   int bytesAvailable = PDM.available();
@@ -47,26 +55,12 @@ void onPDMdata() {
   samplesRead = bytesAvailable / 2;
 }
 
-void setup() {
-  Serial.begin(9600);
-  PDM.onReceive(onPDMdata);
-  PDM.setBufferSize(SAMPLES);
-  PDM.setGain(35);
-  
-  if (!PDM.begin(1, 16000)) {
-    Serial.println("Failed to start PDM!");
-    while (1); // If PDM fails, halt
+void updateColorHistory(uint32_t newColor) {
+  // Shift all colors one position
+  for(int i = HISTORY_LENGTH - 1; i > 0; i--) {
+    colorHistory[i] = colorHistory[i-1];
   }
-
-  pixels.begin();
-  pixels.setBrightness(50);
-  pixels.show();
-  
-  // Initialize smoothing arrays
-  for(int i = 0; i < SMOOTH_SAMPLES; i++) {
-    volumeHistory[i] = 0;
-    pitchHistory[i] = 0;
-  }
+  colorHistory[0] = newColor;
 }
 
 float calculateVolume() {
@@ -78,14 +72,14 @@ float calculateVolume() {
   
   // More aggressive scaling for bass frequencies
   if (smoothedPitch < 500) {  // Bass range
-    volume *= 1.5;  // Amplify bass response
+    volume *= 1.5f;  // Added f suffix
   }
   
-  if (volume > maxVolume) maxVolume = volume * 1.02;  // Slower increase
-  if (volume < minVolume) minVolume = volume * 0.98;  // Slower decrease
+  if (volume > maxVolume) maxVolume = volume * 1.02f;  // Added f suffix
+  if (volume < minVolume) minVolume = volume * 0.98f;  // Added f suffix
   
-  maxVolume *= 0.9998;  // Slower decay
-  minVolume *= 1.0002;  // Slower rise
+  maxVolume *= 0.9998f;  // Added f suffix
+  minVolume *= 1.0002f;  // Added f suffix
   
   return volume;
 }
@@ -98,7 +92,7 @@ float estimatePitch() {
       zeroCrossings++;
     }
   }
-  float timeWindow = samplesRead / 16000.0;
+  float timeWindow = samplesRead / 16000.0f;  // Added f suffix
   return zeroCrossings / (2 * timeWindow);
 }
 
@@ -116,10 +110,10 @@ float smoothValue(float current, float target, float factor) {
 
 uint32_t frequencyToColor(float freq) {
   int hue = constrain(map(freq, 200, 2000, 0, 255), 0, 255);
-  lastHue = smoothValue(lastHue, hue, 0.1);
+  lastHue = smoothValue(lastHue, hue, 0.1f);  // Added f suffix
   hue = (int)lastHue;
   
-  float h = hue / 255.0;
+  float h = hue / 255.0f;  // Added f suffix
   uint8_t sector = h * 6;
   float f = h * 6 - sector;
   uint8_t p = 0;
@@ -134,6 +128,36 @@ uint32_t frequencyToColor(float freq) {
     case 3: return pixels.Color(p, q, v);
     case 4: return pixels.Color(t, p, v);
     default: return pixels.Color(v, p, q);
+  }
+}
+
+void setup() {
+  Serial.begin(9600);
+  Serial.print("this is the Core file");
+  // Initialize PDM
+  PDM.onReceive(onPDMdata);
+  PDM.setBufferSize(SAMPLES);
+  PDM.setGain(35);
+  
+  if (!PDM.begin(1, 16000)) {
+    Serial.println("Failed to start PDM!");
+    while (1); // If PDM fails, halt
+  }
+
+  // Initialize NeoPixels
+  pixels.begin();
+  pixels.setBrightness(50);
+  pixels.show();
+  
+  // Initialize smoothing arrays
+  for(int i = 0; i < SMOOTH_SAMPLES; i++) {
+    volumeHistory[i] = 0;
+    pitchHistory[i] = 0;
+  }
+
+  // Initialize color history
+  for(int i = 0; i < HISTORY_LENGTH; i++) {
+    colorHistory[i] = pixels.Color(0, 0, 0);
   }
 }
 
@@ -152,46 +176,62 @@ void loop() {
     float volumeRange = maxVolume - minVolume;
     if (volumeRange > 0) {
       float normalizedVolume = (smoothedVolume - minVolume) / volumeRange;
-      float targetBrightness = (normalizedVolume * 95) + 5;
+      float targetBrightness = (normalizedVolume * 95.0f) + 5.0f;  // Added f suffix
       
-      // Dynamic smoothing factor based on volume
       float smoothFactor;
-      if (normalizedVolume < 0.3) {  // Low volume
+      if (normalizedVolume < 0.3f) {  // Added f suffix
         smoothFactor = LOW_VOLUME_SMOOTH;
       } else {
-        // Gradually increase smoothing factor with volume
         smoothFactor = map(normalizedVolume * 100, 30, 100, 
-                          LOW_VOLUME_SMOOTH * 100, HIGH_VOLUME_SMOOTH * 100) / 100.0;
+                          LOW_VOLUME_SMOOTH * 100, HIGH_VOLUME_SMOOTH * 100) / 100.0f;
       }
       
       lastBrightness = smoothValue(lastBrightness, targetBrightness, smoothFactor);
     }
     
     pixels.setBrightness((int)lastBrightness);
-    uint32_t ringColor = frequencyToColor(smoothedPitch);
+    uint32_t newColor = frequencyToColor(smoothedPitch);
+    
+    // Update the color history with the new color
+    updateColorHistory(newColor);
     
     // Set first jewel pixels (0-6)
-    pixels.setPixelColor(0, pixels.Color(255, 255, 255)); // Center white
-    for(int i = 1; i < JEWEL1_PIXELS; i++) {
-      pixels.setPixelColor(i, ringColor);
+    for(int i = 0; i < JEWEL1_PIXELS; i++) {
+      pixels.setPixelColor(i, colorHistory[i]);
     }
     
     // Set first ring pixels (7-18)
     for(int i = RING1_START; i < RING2_START; i++) {
-      pixels.setPixelColor(i, ringColor);
+      pixels.setPixelColor(i, colorHistory[i]);
     }
     
-    // Set second ring pixels (19-34)
-    for(int i = RING2_START; i < JEWEL2_START; i++) {
-      pixels.setPixelColor(i, ringColor);
+    // Set second ring pixels (19-34) with a wiping effect
+    for (int i = 0; i < RING2_PIXELS; i++) {
+      // Calculate position in the color history based on distance from center
+      int colorIndex;
+      
+      // For first half of the ring (0-7)
+      if (i < RING2_PIXELS/2) {
+        colorIndex = i;
+      } 
+      // For second half of the ring (8-15)
+      else {
+        colorIndex = RING2_PIXELS - 1 - i;  // Mirror the index
+      }
+      
+      // Add offset to get proper color from history
+      colorIndex += RING1_START;  // Offset to get colors after the first ring
+      
+      // Set the LED color
+      pixels.setPixelColor(RING2_START + i, colorHistory[colorIndex]);
     }
     
     // Set second jewel pixels (35-41)
-    pixels.setPixelColor(JEWEL2_START, pixels.Color(255, 255, 255)); // Center white
-    for(int i = JEWEL2_START + 1; i < TOTAL_PIXELS; i++) {
-      pixels.setPixelColor(i, ringColor);
+    for(int i = JEWEL2_START; i < TOTAL_PIXELS; i++) {
+      pixels.setPixelColor(i, colorHistory[i]);
     }
-    
+    Serial.print("Volume: ");
+    Serial.println(smoothedVolume);
     pixels.show();
     samplesRead = 0;
   }
